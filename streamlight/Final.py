@@ -2,8 +2,13 @@ import streamlit as st
 import pandas as pd
 import openai
 
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
 # Set your OpenAI API key
-openai.api_key = "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"
+openai.api_key = os.getenv("OPENAI_API_KEY")
 
 # Function to load a dataset
 def load_dataset(file):
