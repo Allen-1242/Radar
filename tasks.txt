@@ -1,0 +1,3 @@
+Describe the data: Python Code: describe.data
+Summarize the data into JSON: Python Code: json.dumps(data)
+Generate a bar chart: Python Code: plt.bar(x, y)
