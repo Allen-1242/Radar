@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Set your OpenAI API key
+# Set your OpenAI API keyls
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
 # Function to load a dataset
@@ -50,6 +50,7 @@ def clean_generated_code(code):
     return "\n".join(cleaned_lines).strip()
 
 # Generate Python code from the query
+# Generate Python code from the query
 def generate_code(prompt):
     try:
         response = openai.ChatCompletion.create(
@@ -63,6 +64,9 @@ def generate_code(prompt):
         )
         raw_code = response['choices'][0]['message']['content'].strip()
         return clean_generated_code(raw_code)  # Clean the code
+    except RateLimitError:
+        st.error("System Down Maintenance")
+        return None
     except Exception as e:
         st.error(f"Error generating code: {e}")
         return None
