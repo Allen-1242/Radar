@@ -5,6 +5,10 @@ from core.prompt_engine import prompt_to_json
 from core.chart_render import render_chart
 from core.vector_store import VectorStore
 
+import openai, streamlit as st
+
+openai.api_key = st.secrets["OPENAI_API_KEY"]
+
 def inject_rag_context(user_prompt: str, rag_context: str) -> str:
     return f"""You are a dashboard assistant. Use the following data context to interpret the request.
 
