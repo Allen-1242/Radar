@@ -7,10 +7,10 @@ from core.prompt_engine import prompt_to_json, inject_rag_context
 from core.chart_render import render_chart
 from core.vector_store import VectorStore
 
-# —————— Set API key ——————
+# — Set the OpenAI API key from Streamlit secrets
 openai.api_key = st.secrets["OPENAI_API_KEY"]
 
-# —————— Data loading & schema ——————
+# — Data loading & dynamic schema generation
 uploaded_file = st.file_uploader("Upload your CSV", type="csv")
 if uploaded_file:
     df = pd.read_csv(uploaded_file)
@@ -24,7 +24,7 @@ SCHEMA = {
     ]
 }
 
-# —————— Prepare vector store (FAISS) ——————
+# — Prepare schema chunks for vector store embedding
 schema_chunks = [
     f"Column: {col} | Type: {dtype} | Unique: {df[col].nunique()}"
     + (
@@ -42,14 +42,40 @@ def get_vector_store(chunks):
 
 vs = get_vector_store(schema_chunks)
 
-# —————— Sidebar: Conversational Assistant ——————
+# — Initialize multi-page state
+if "pages" not in st.session_state:
+    st.session_state.pages = [{
+        "name": "Page 1",
+        "tiles": [None, None, None, None],
+        "title": "Dashboard View"
+    }]
+    st.session_state.current_page_index = 0
+
+# — Sidebar: Page selector, new page, and assistant
 with st.sidebar:
+    # Page management
+    page_names = [p["name"] for p in st.session_state.pages]
+    selected = st.selectbox("Select Page", page_names,
+                            index=st.session_state.current_page_index)
+    st.session_state.current_page_index = page_names.index(selected)
+
+    if st.button("Add New Page"):
+        new_page = {
+            "name": f"Page {len(st.session_state.pages) + 1}",
+            "tiles": [None, None, None, None],
+            "title": "New Dashboard"
+        }
+        st.session_state.pages.append(new_page)
+        st.session_state.current_page_index = len(st.session_state.pages) - 1
+
+    st.markdown("---")
+    # Conversational assistant
     st.markdown("### Ask the Assistant")
-    st.markdown("Pose a question about your dataset or chart.")
+    st.markdown("Pose a question about your dataset or chart context.")
 
     user_question = st.text_area(
         "Your question",
-        placeholder="E.g., What other patterns are worth exploring?"
+        placeholder="E.g., What patterns are worth exploring?"
     )
     selected_tile = st.selectbox(
         "Include chart from tile (optional)",
@@ -57,20 +83,16 @@ with st.sidebar:
     )
 
     if st.button("Ask") and user_question.strip():
-        # Retrieve context for assistant
-        assistant_chunks = vs.query(user_question, top_k=5)
-        assistant_rag = "\n".join(assistant_chunks)
-
-        # Optional chart context
-        chart_ctx = "None selected."
-        if selected_tile != "None":
-            chart_ctx = f"Chart from Tile {selected_tile}"
-
-        system_prompt = f"""
-You are a data analysis assistant. Use the following context to respond helpfully.
+        # Build assistant context from schema
+        dataset_context = "\n".join(schema_chunks)
+        chart_ctx = (
+            f"Chart from Tile {selected_tile}"
+            if selected_tile != "None" else "None selected."
+        )
+        system_prompt = f"""You are a data analysis assistant. Use the following context to respond.
 
 DATASET STRUCTURE:
-{assistant_rag}
+{dataset_context}
 
 USER QUESTION:
 {user_question}
@@ -92,16 +114,18 @@ CHART CONTEXT:
         except Exception as e:
             st.error(f"Assistant error: {e}")
 
-# —————— Initialize tile state ——————
-if "tiles" not in st.session_state:
-    st.session_state.tiles = [None, None, None, None]
+# — Sync current page state
+page = st.session_state.pages[st.session_state.current_page_index]
+st.session_state.tiles = page["tiles"]
 
-# —————— Main app: Dashboard & Data View tabs ——————
+# — Main area: Dashboard & Data View tabs
 tab1, tab2 = st.tabs(["Dashboard", "Dataset View"])
 
 with tab1:
+    # Clear all tiles
     if st.button("Clear All Tiles"):
         st.session_state.tiles = [None, None, None, None]
+        page["tiles"] = st.session_state.tiles
 
     st.title("RADAR: Conversational Dashboard Builder")
     user_prompt = st.text_input(
@@ -110,21 +134,20 @@ with tab1:
 
     if st.button("Generate Chart") and user_prompt.strip():
         try:
-            # Which tiles are used
-            used_tiles = [i for i, t in enumerate(st.session_state.tiles) if t]
-
-            # RAG for chart
-            chunks = vs.query(user_prompt, top_k=5)
-            rag_ctx = "\n".join(chunks)
+            used_tiles = [
+                i for i, t in enumerate(st.session_state.tiles) if t is not None
+            ]
+            # RAG context for chart generation
+            rag_chunks = vs.query(user_prompt, top_k=5)
+            rag_ctx = "\n".join(rag_chunks)
             rag_prompt = inject_rag_context(user_prompt, rag_ctx)
 
             # Debug: full prompt
             with st.expander("View full LLM prompt"):
                 st.code(rag_prompt, language="text")
 
-            # Generate config + render
             config = prompt_to_json(rag_prompt, SCHEMA, used_tiles)
-            if config.get("filter") in ["NULL","Null","none","None"]:
+            if config.get("filter") in ["NULL", "Null", "none", "None"]:
                 config["filter"] = None
 
             fig = render_chart(df, config)
@@ -144,13 +167,16 @@ with tab1:
             else:
                 st.error(f"Unknown action: {action}")
 
-        except Exception as e:
-            st.error(f"Error: {e}")
+            # Save back to page state
+            page["tiles"] = st.session_state.tiles
 
-    # Dashboard title
-    dashboard_title = st.text_input("Dashboard Title", value="Dashboard View")
+        except Exception as e:
+            st.error(f"Chart generation error: {e}")
+
+    # Dashboard title per page
+    page["title"] = st.text_input("Dashboard Title", value=page["title"])
     st.markdown(
-        f"<h2 style='text-align: center'>{dashboard_title}</h2>",
+        f"<h2 style='text-align: center'>{page['title']}</h2>",
         unsafe_allow_html=True
     )
 
@@ -159,29 +185,37 @@ with tab1:
     for idx, col in enumerate([col1, col2, col1, col2]):
         with col:
             base_style = (
-                "border:2px dashed #ccc; border-radius:5px; "
-                "padding:20px; height:200px; "
-                "background-color:rgba(224,224,224,0.4); "
+                "border:2px dashed #ccc; border-radius:5px; padding:20px; "
+                "height:200px; background-color:rgba(224,224,224,0.4); "
                 "display:flex; align-items:center; justify-content:center;"
             )
-            inner = ""
-            if idx in (0,2): inner += "border-right:2px solid #aaa;"
-            if idx in (1,3): inner += "border-left:2px solid #aaa;"
-            if idx in (0,1): inner += "border-bottom:2px solid #aaa;"
-            if idx in (2,3): inner += "border-top:2px solid #aaa;"
-            style = base_style + inner
+            inner_borders = ""
+            if idx in (0, 2):
+                inner_borders += "border-right:2px solid #aaa;"
+            if idx in (1, 3):
+                inner_borders += "border-left:2px solid #aaa;"
+            if idx in (0, 1):
+                inner_borders += "border-bottom:2px solid #aaa;"
+            if idx in (2, 3):
+                inner_borders += "border-top:2px solid #aaa;"
 
-            if st.session_state.tiles[idx]:
+            style = base_style + inner_borders
+
+            if st.session_state.tiles[idx] is not None:
                 st.plotly_chart(st.session_state.tiles[idx], use_container_width=True)
                 if st.button(f"Reset Tile {idx}"):
                     st.session_state.tiles[idx] = None
+                    page["tiles"] = st.session_state.tiles
             else:
-                st.markdown(f"<div style='{style}'>Tile {idx}</div>",
-                            unsafe_allow_html=True)
+                st.markdown(
+                    f"<div style='{style}'>Tile {idx}</div>",
+                    unsafe_allow_html=True
+                )
 
 with tab2:
     st.subheader("Detected Schema")
     st.json(SCHEMA)
+
     st.subheader("Dataset Preview")
     st.dataframe(df)
     st.markdown(f"**Shape:** {df.shape[0]} rows × {df.shape[1]} columns")
